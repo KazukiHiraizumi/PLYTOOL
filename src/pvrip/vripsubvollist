@@ -1,0 +1,137 @@
+#!/usr/bin/perl
+#
+# vripsubvollist: This program, given a list of subvol .conf
+# files, will generate the commands to vrip each of them.
+
+
+sub printUsage {
+    print STDERR "\n";
+    print STDERR "Usage:\n";
+    print STDERR "vripsubvollist [-crunch] [-rampscale s] voxelsize *subvol*.conf > outcommands\n";
+    print STDERR "\n";
+    print STDERR "  -crunch  Will generate plycrunched .set files...\n";
+    print STDERR "  -rampscale <s> Will tell vrip to use rampscale s.\n";
+    print STDERR "  -passtovrip \"X\" will pass X to vrip.\n";
+    print STDERR "  -passtovripsurf \"X\" will pass X to vripsurf.\n";
+    print STDERR "\n";
+    print STDERR "and it will generate a list of the commands necessary\n";
+    print STDERR "to run vripnew, vripsurf, and plycull on the volumes.\n";
+    print STDERR "\n";
+    exit(-1);
+}
+
+if ($#ARGV < 1 || substr($ARGV[0], 0, 2) eq "-h") {
+    &printUsage();
+}
+
+# Extract the options, if present
+$DOCRUNCH = 0;
+$SUBVOLDIR=".";
+while (substr($ARGV[0], 0,1) eq "-") {
+    if ($ARGV[0] eq "-crunch") {
+	$DOCRUNCH=1;
+	splice(@ARGV, 0, 1);
+    } elsif ($ARGV[0] eq "-rampscale") {
+	$RAMPSCALE = $ARGV[1];
+	if ($RAMPSCALE eq "") {
+	    print STDERR "Error: no rampscale???\n\n";
+	    &printUsage;
+	}
+	splice(@ARGV, 0, 2);
+    }
+    elsif ($ARGV[0] eq "-subvoldir") {
+	$SUBVOLDIR = $ARGV[1];
+	splice(@ARGV, 0, 2);
+    }  elsif ($ARGV[0] eq "-meshcache") {
+	$MESHCACHE = $ARGV[1];
+	splice(@ARGV, 0, 2);
+    } elsif ($ARGV[0] eq "-passtovrip") {
+	$PASSTOVRIP = $ARGV[1];
+	splice(@ARGV, 0, 2);
+    } elsif ($ARGV[0] eq "-passtovripsurf") {
+	$PASSTOVRIPSURF = $ARGV[1];
+	splice(@ARGV, 0, 2);
+    } else {
+	print STDERR "Error: unhandled arg $ARGV[0]...\n";
+	&printUsage();
+	exit(-1);
+    }
+}
+
+	
+    
+# Get and check voxel size
+$voxelsize = 0.0+$ARGV[0];
+if ($voxelsize <= 0) {
+    die("Error, voxelsize not greater than zero...\n");
+}
+
+# Get directory
+$cwd = `pwd`;
+chop $cwd;
+
+#Generate the command for each file name...
+for ($n=1; $n <= $#ARGV; $n++) {
+    $conf = $ARGV[$n];
+    $nscans = `wc -l $conf`;
+# Open input conf file...
+    open(INCONF, $conf) || die 
+	"\nErr: Unable to open input .conf file $conf, aborting.\n";
+    
+    # Process each file mentioned in the conf file...
+    $iscan = 0;
+    $minscale = 2.0;
+    for ($iscan = 0; $confline = <INCONF>; $iscan++) {
+
+	@words = split(' ', $confline);
+	$inply = "$words[0]";
+	
+	# A few checks for quick skipping...
+	#if ($words[0] ne "bmesh") {
+	#    #print STDERR "Warn: skipping non-bmesh line: $confline...\n";
+	#    next;
+	#}
+	$scale = $words[1];
+	$minscale = $scale if ($scale < $minscale);
+	
+    }
+    $voxelsize = 0.0+$minscale;
+    $bbox = $conf;
+    $bbox =~ s/.txt/.bbox.ply/g;
+    $vri = $conf;
+    $vri =~ s/.txt/.vri/g;
+    $plyv = $conf;
+    $plyv =~ s/.txt/_beyondbbox.ply/g;
+    $ply = $conf;
+    $ply =~ s/.txt/.ply/g;
+    # Generate the command.  Include "npri -h 250", which sets
+    # its priority really low...
+    if ($DOCRUNCH) {
+	$crunchstr = " ply2crunchset -l 5 $ply;";
+    }
+    if (defined($RAMPSCALE)) {
+	$rampscalestr = " -rampscale $RAMPSCALE "; 
+    } else {
+	$rampscalestr = "";
+    }
+
+    # Remove the plyv (overlapping ply files?)
+    $rm_plyv = "";
+    # $rm_plyv = "/bin/rm $plyv;";
+
+    # Amount of safety in plyculling triangles
+    $epsilon = 2.1 * $voxelsize;
+    $BASEDIR = "$ENV{'HOME'}/cvs/threadedStereo/vrip/bin";
+    $TRIDEC = "$ENV{'HOME'}/cvs/threadedStereo/tridecimator/";
+    $VRIP_DIR = "$ENV{'HOME'}/cvs/threadedStereo/vrip/src/vrip";
+    
+    print STDOUT "cd $MESHCACHE; set path = ($BASEDIR $TRIDEC \$path); setenv VRIP_DIR '$VRIP_DIR'; $BASEDIR/vripnew $vri $conf $bbox $voxelsize $rampscalestr $PASSTOVRIP; ".
+	"$BASEDIR/vripsurf -no_remove_slivers $vri $plyv $PASSTOVRIPSURF; ".
+	"$BASEDIR/plycull $bbox $plyv $ply $epsilon; ".
+	"$rm_plyv $crunchstr\n";
+    $plys = $plys . " $ply";
+}
+
+#print STDOUT "plymerge $plys > all_unshared.ply\n";
+#print STDOUT "plyshared < all_unshared.ply > all.ply\n";
+#print STDOUT "plyclean  -defaults all.ply > clean.ply\n";

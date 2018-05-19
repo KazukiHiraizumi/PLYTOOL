@@ -1,0 +1,201 @@
+#! /usr/bin/tclsh
+
+#
+# vripdicebbox 
+# Finds all the bboxes that are contained in the diced section
+# and outputs image name and bbox to genTex
+
+# default diced dir
+set diceddir ".";
+
+proc usage args {
+    global diceddir;
+    puts "";
+    puts "Usage: vripdicebbox diceddir";
+    puts "";
+    puts "Where:";
+    puts "      diceddir    is where it will find all the diced files";
+    puts "                   files for the dicedumes. Default: $diceddir";
+    puts "";
+    exit -1;
+}
+
+proc bbox_intersect {xmin1 ymin1 zmin1 xmax1 ymax1 zmax1 \
+			 xmin2 ymin2 zmin2 xmax2 ymax2 zmax2} \
+{
+    if {$xmin1 > $xmax2} {return 0};
+    if {$xmax1 < $xmin2} {return 0};
+    if {$ymin1 > $ymax2} {return 0};
+    if {$ymax1 < $ymin2} {return 0};
+    if {$zmin1 > $zmax2} {return 0};
+    if {$zmax1 < $zmin2} {return 0};
+    
+    return 1;
+}
+
+
+# Given a ply file and and xf
+#
+proc ply2bbox {plyname} {
+  
+    set cmd "exec  plybbox $plyname";
+    catch {eval $cmd} msg;
+    scan $msg "%f %f %f %f %f %f" minx miny minz maxx maxy maxz;
+  
+    # Set bboxname to be the corresponding bbox file
+    regsub .ply $plyname .bbox bboxname;
+    exec rm -f $bboxname 
+    set bboxfid [open $bboxname "w+"];
+    
+    puts $bboxfid "$minx $miny $minz";
+    puts $bboxfid "$maxx $maxy $maxz";
+    
+    close $bboxfid;
+    exec chmod 666 $bboxname 
+}
+
+#
+# Main script
+#
+global dbbox;
+global trans;
+if {$argc < 2}  {
+    usage;
+    exit -1;
+} else {
+  
+    #
+    # Read the .conf file, storing the bboxes for each bmesh
+    # It checks dates.  If the bboxes are out of date, then
+    # it will recreate them.  Otherwise, it will read the
+    # bbox to get the bounds of the mesh.
+    #
+    set dicedir [lindex $argv 1];
+    set bboxfilename "$dicedir/bbtmp.txt";    
+    set numDiced 0;
+
+    # Verify it exists
+    if { ! [file readable $bboxfilename] } {
+	puts "";
+	puts "Error: unable to open bbox file $bboxfilename";
+	usage;
+	exit;
+    }
+    
+    set fileid [open $bboxfilename "r"];
+    
+    while {[gets $fileid bboxline] >= 0} {
+	
+	scan $bboxline "%f %f %f %f %f %f" dbbox($numDiced,xmin) \
+	    dbbox($numDiced,ymin) dbbox($numDiced,zmin)\
+	    dbbox($numDiced,xmax) \
+	    dbbox($numDiced,ymax) dbbox($numDiced,zmax);
+	incr numDiced;
+    }
+
+    # Read the .conf file, storing the bboxes for each bmesh
+    # It checks dates.  If the bboxes are out of date, then
+    # it will recreate them.  Otherwise, it will read the
+    # bbox to get the bounds of the mesh.
+    #
+
+    set conffilename [lindex $argv 0];
+    
+    set numMeshes 0;
+
+    # Verify it exists
+    if { ! [file readable $conffilename] } {
+	puts "";
+	puts "Error: unable to open .conf file $conffilename";
+	usage;
+	exit;
+    }
+    
+    set fileid [open $conffilename "r"];
+    
+    while {[gets $fileid inline] >= 0} {
+	if {[lindex $inline 2] == "1" } {
+	    #	puts "Computing bounding box for [lindex $inline 1]...";
+	    set plyfile [lindex $inline 0];
+	    # Set bboxfile to be the corresponding bbox file
+	    regsub .ply $plyfile .bbox bboxfile;
+	    regsub ".tc.ply" $plyfile .xf xffile;
+
+	    regsub surface- $plyfile {}  imgname;
+	    regsub ".tc.ply" $imgname .png  imgname;
+	    # Check if bbox file needs to be created or updated
+	    if {![file exists $xffile]} {
+		puts "Cannot find xf file skipping";
+		continue;
+	    } else {
+		set xffid [open $xffile "r"];
+		set transline {}
+		for { set i 0 } { $i < 4 } { incr i } {
+		    gets $xffid xfline;
+		    append transline " " $xfline
+		}
+		set trans($numMeshes,name)  $imgname;		    
+		scan $imgname "%s" trans($numMeshes,name);		    
+		set  trans($numMeshes,trans) $transline;
+		close $xffid
+	    }
+	    #puts $bboxfile
+	    # Check if bbox file needs to be created or updated
+	    if {![file exists $bboxfile] } {
+	        puts "bbox does not exist, creating...";
+		ply2bbox $plyfile;
+	    } elseif {  [file size $bboxfile] == 0 } {
+		puts "bbox $bboxfile size 0 recreating"
+		file delete -force $bboxfile
+		ply2bbox $plyfile;
+	    } else {
+		set bboxmtime [file mtime $bboxfile];
+		set confmtime [file mtime $conffilename];
+		if {$confmtime > $bboxmtime} {
+		    #puts "bbox file is out of date, redoing....";
+		    ply2bbox $plyfile;
+		}
+	    }
+	    	#puts $bboxfile
+	    #puts "Loading bboxfile: $bboxfile...";
+	    set bboxfid [open $bboxfile "r"];
+	    gets $bboxfid minline;
+	    gets $bboxfid maxline;
+	    scan $minline "%f %f %f" bbox($numMeshes,xmin) \
+		bbox($numMeshes,ymin) bbox($numMeshes,zmin);
+	    scan $maxline "%f %f %f" bbox($numMeshes,xmax) \
+		bbox($numMeshes,ymax) bbox($numMeshes,zmax);
+	    
+	    close $bboxfid;
+	    incr numMeshes;
+	}
+    }
+
+    close $fileid;
+   
+    puts "Number of input meshes: $numMeshes total diced: $numDiced";
+   
+    # Precompute the meshlist lines, so we only need to figure out
+    # which ones to paste into each conf file
+    for {set i 0} {$i < $numDiced} {incr i}  {
+	# pad svnumstr with 0's to make it 4 characters long
+	set svnumstr [string range "00000000" 0 [expr 7 - \
+						 [string length $i]]];
+	set svnumstr "$dicedir/bbox-$svnumstr$i.txt";	
+	set bboxfid [open $svnumstr "w"];
+	for {set j 0} {$j < $numMeshes} {incr j}  {
+	    if { [info exists dbbox($i,xmin)] && [info exists bbox($j,xmin)] } {	
+		if {[bbox_intersect $dbbox($i,xmin) $dbbox($i,ymin)\
+			 $dbbox($i,zmin) \
+			 $dbbox($i,xmax) $dbbox($i,ymax) $dbbox($i,zmax) \
+			 $bbox($j,xmin) $bbox($j,ymin) $bbox($j,zmin) \
+			 $bbox($j,xmax) $bbox($j,ymax) $bbox($j,zmax)]} {
+		    puts $bboxfid "$j $trans($j,name) $bbox($j,xmin) $bbox($j,ymin) $bbox($j,zmin) $bbox($j,xmax) $bbox($j,ymax) $bbox($j,zmax) $trans($j,trans)"
+		}
+	    }
+	
+	}
+	
+	close $bboxfid;
+    }
+}
